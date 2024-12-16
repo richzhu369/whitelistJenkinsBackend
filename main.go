@@ -17,10 +17,13 @@ func init() {
 	if err != nil {
 		log.Fatal("failed to load location: ", err)
 	}
+	now := time.Now().In(loc) // 获取当前上海时间
+	log.Println("Current time in Shanghai:", now)
 	time.Local = loc
 
 	// 初始化数据库
-	DB, ERR = gorm.Open(sqlite.Open("gorm.db"), &gorm.Config{})
+	dsn := "gorm.db?parseTime=true&loc=Asia%2FShanghai"
+	DB, ERR = gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if ERR != nil {
 		log.Fatal(ERR.Error())
 	}

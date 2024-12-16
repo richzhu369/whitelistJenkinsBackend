@@ -3,11 +3,15 @@ package main
 import (
 	"fmt"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 )
 
 func whitelistAdd(c *gin.Context) {
+	log.Println(time.Now().In(time.Local))
 	var whiteList WhiteList
 	if err := c.ShouldBindJSON(&whiteList); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -92,6 +96,9 @@ func whitelistAdd(c *gin.Context) {
 			IP:           ip,
 			Act:          "add",
 			OpUser:       whiteList.OpUser,
+			Model: gorm.Model{
+				CreatedAt: time.Now().In(time.Local),
+			},
 		}
 
 		if err := DB.Create(&whitelistLog).Error; err != nil {
@@ -110,6 +117,7 @@ func whitelistAdd(c *gin.Context) {
 }
 
 func whitelistDelete(c *gin.Context) {
+	log.Println(time.Now().In(time.Local))
 	var whiteList WhiteList
 	if err := c.ShouldBindJSON(&whiteList); err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -189,6 +197,9 @@ func whitelistDelete(c *gin.Context) {
 			IP:           ip,
 			Act:          "del",
 			OpUser:       whiteList.OpUser,
+			Model: gorm.Model{
+				CreatedAt: time.Now().In(time.Local),
+			},
 		}
 
 		if err := DB.Create(&whitelistLog).Error; err != nil {
