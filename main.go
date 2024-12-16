@@ -5,12 +5,20 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"log"
+	"time"
 )
 
 var DB *gorm.DB
 var ERR error
 
 func init() {
+	// 设置时区为上海时区
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		log.Fatal("failed to load location: ", err)
+	}
+	time.Local = loc
+
 	// 初始化数据库
 	DB, ERR = gorm.Open(sqlite.Open("gorm.db"), &gorm.Config{})
 	if ERR != nil {

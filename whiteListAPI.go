@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"net/http"
+	"strings"
 )
 
 func whitelistAdd(c *gin.Context) {
@@ -21,15 +22,28 @@ func whitelistAdd(c *gin.Context) {
 		return
 	}
 
+	// Split the IP addresses
+	ips := strings.Split(whiteList.IP, ",")
+
 	// 检测商户号+IP的组合是否存在于 WhiteList 表
-	var existingWhiteList WhiteList
-	if err := DB.Where("merchant_name = ? AND ip = ?", whiteList.MerchantName, whiteList.IP).First(&existingWhiteList).Error; err == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code":    40900,
-			"message": "商户" + whiteList.MerchantName + "的白名单IP" + whiteList.IP + "已存在",
-		})
-		return
+	for _, ip := range ips {
+		var existingWhiteList WhiteList
+		if err := DB.Where("merchant_name = ? AND ip = ?", whiteList.MerchantName, ip).First(&existingWhiteList).Error; err == nil {
+			c.JSON(http.StatusOK, gin.H{
+				"code":    40900,
+				"message": "商户" + whiteList.MerchantName + "的白名单IP" + ip + "已存在",
+			})
+			return
+		}
 	}
+	//var existingWhiteList WhiteList
+	//if err := DB.Where("merchant_name = ? AND ip = ?", whiteList.MerchantName, whiteList.IP).First(&existingWhiteList).Error; err == nil {
+	//	c.JSON(http.StatusOK, gin.H{
+	//		"code":    40900,
+	//		"message": "商户" + whiteList.MerchantName + "的白名单IP" + whiteList.IP + "已存在",
+	//	})
+	//	return
+	//}
 
 	// 根据 country 值执行不同的命令
 	var server, command string
@@ -111,15 +125,30 @@ func whitelistDelete(c *gin.Context) {
 		return
 	}
 
+	// Split the IP addresses
+	ips := strings.Split(whiteList.IP, ",")
+
 	// 检测商户名+IP的组合是否存在于 WhiteList 表
-	var existingWhiteList WhiteList
-	if err := DB.Where("merchant_name = ? AND ip = ?", whiteList.MerchantName, whiteList.IP).First(&existingWhiteList).Error; err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code":    40400,
-			"message": "商户" + whiteList.MerchantName + "的白名单IP" + whiteList.IP + "不存在，无需执行删除操作",
-		})
-		return
+	for _, ip := range ips {
+		var existingWhiteList WhiteList
+		if err := DB.Where("merchant_name = ? AND ip = ?", whiteList.MerchantName, ip).First(&existingWhiteList).Error; err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"code":    40400,
+				"message": "商户" + whiteList.MerchantName + "的白名单IP" + ip + "不存在，无需执行删除操作",
+			})
+			return
+		}
 	}
+
+	// 检测商户名+IP的组合是否存在于 WhiteList 表
+	//var existingWhiteList WhiteList
+	//if err := DB.Where("merchant_name = ? AND ip = ?", whiteList.MerchantName, whiteList.IP).First(&existingWhiteList).Error; err != nil {
+	//	c.JSON(http.StatusOK, gin.H{
+	//		"code":    40400,
+	//		"message": "商户" + whiteList.MerchantName + "的白名单IP" + whiteList.IP + "不存在，无需执行删除操作",
+	//	})
+	//	return
+	//}
 
 	// 根据 country 值执行不同的命令
 	var server, command string
