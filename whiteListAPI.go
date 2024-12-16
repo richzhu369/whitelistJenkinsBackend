@@ -157,10 +157,10 @@ func whitelistDelete(c *gin.Context) {
 		server = "15.229.106.224"
 		command = fmt.Sprintf("/data/jenkins/workspace/br-all-server/bsicrontask/bsicrontask 172.31.9.57:2379,172.31.4.34:2379,172.31.9.96:2379 /bs/%s.toml del_ip %s", whiteList.MerchantName, whiteList.IP)
 	case "pk":
-		server = "15.229.106.224"
+		server = "16.162.63.178"
 		command = fmt.Sprintf("/opt/jenkins/workspace/pk-all-server/bsicrontask/bsicrontask 10.2.32.103:2379,10.2.32.101:2379,10.2.32.102:2379 /pk/%s.toml del_ip %s", whiteList.MerchantName, whiteList.IP)
 	case "vn":
-		server = "15.229.106.224"
+		server = "16.162.63.178"
 		command = fmt.Sprintf("/opt/jenkins/workspace/vn-all-server/bsicrontask/bsicrontask 10.0.3.102:2379,10.0.3.101:2379,10.0.3.103:2379 /vn/%s.toml del_ip %s", whiteList.MerchantName, whiteList.IP)
 	case "ph":
 		server = "18.167.173.173"
