@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"github.com/gin-gonic/gin"
+	"net"
 	"net/http"
+	"strings"
 )
 
 // CORSMiddleware Cors 跨域中间件
@@ -20,4 +23,16 @@ func CORSMiddleware() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// ValidateWhiteListIPs 数据校验
+func ValidateWhiteListIPs(whiteList WhiteList) error {
+	ips := strings.Split(whiteList.IP, ",")
+	for _, ip := range ips {
+		ip = strings.TrimSpace(ip)
+		if net.ParseIP(ip) == nil {
+			return fmt.Errorf("invalid IP address: %s", ip)
+		}
+	}
+	return nil
 }
