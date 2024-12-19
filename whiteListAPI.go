@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -14,86 +15,134 @@ func whitelistAdd(c *gin.Context) {
 	log.Println(time.Now().In(time.Local))
 	var whiteList WhiteList
 	if err := c.ShouldBindJSON(&whiteList); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	if whiteList.OpUser == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":  40000,
-			"error": "未登陆，权限被拒绝",
+		c.JSON(http.StatusOK, gin.H{
+			"code":    40000,
+			"message": "传入的数据格式错误",
 		})
 		return
 	}
 
-	// Split the IP addresses
-	ips := strings.Split(whiteList.IP, ",")
+	if whiteList.OpUser == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    40000,
+			"message": "未登陆，权限被拒绝",
+		})
+		return
+	}
 
-	// Check each IP address individually
-	for _, ip := range ips {
+	// ip地址校验
+	err := ValidateWhiteListIPs(whiteList)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    40000,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// Split the merchant names
+	merchantNames := strings.Split(whiteList.MerchantName, ",")
+
+	// Add each merchant name with the entire IP list
+	for _, merchantName := range merchantNames {
+		// Retrieve current whitelist IPs for the merchant
 		var existingWhiteList WhiteList
-		if err := DB.Where("merchant_name = ? AND ip = ?", whiteList.MerchantName, ip).First(&existingWhiteList).Error; err == nil {
+		if err := DB.Where("merchant_name = ?", merchantName).First(&existingWhiteList).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusOK, gin.H{
-				"code":    40900,
-				"message": "商户" + whiteList.MerchantName + "的白名单IP" + ip + "已存在",
+				"code":    50000,
+				"message": "查询数据库失败",
 			})
 			return
 		}
-	}
 
-	// Add each IP address individually
-	for _, ip := range ips {
-		newWhiteList := WhiteList{
-			MerchantName: whiteList.MerchantName,
-			IP:           ip,
-			Country:      whiteList.Country,
-			OpUser:       whiteList.OpUser,
+		// Combine current IPs with new IPs
+		currentIPs := strings.Split(existingWhiteList.IP, ",")
+		newIPs := strings.Split(whiteList.IP, ",")
+
+		// Check for duplicate IPs
+		var duplicateIPs []string
+		for _, newIP := range newIPs {
+			for _, currentIP := range currentIPs {
+				if newIP == currentIP {
+					duplicateIPs = append(duplicateIPs, newIP)
+				}
+			}
 		}
+
+		if len(duplicateIPs) > 0 {
+			c.JSON(http.StatusOK, gin.H{
+				"code":    40000,
+				"message": fmt.Sprintf("以下IP已存在: %s", strings.Join(duplicateIPs, ", ")),
+			})
+			return
+		}
+
+		combinedIPs := append(currentIPs, newIPs...)
+		combinedIPStr := strings.Join(combinedIPs, ",")
 
 		// 根据 country 值执行不同的命令
 		var server, command string
 		switch whiteList.Country {
 		case "br":
 			server = "15.229.106.224"
-			command = fmt.Sprintf("/data/jenkins/workspace/br-all-server/bsicrontask/bsicrontask 172.31.9.57:2379,172.31.4.34:2379,172.31.9.96:2379 /bs/%s.toml add_ip %s", whiteList.MerchantName, ip)
+			command = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, combinedIPStr)
 		case "pk":
 			server = "16.162.63.178"
-			command = fmt.Sprintf("/opt/jenkins/workspace/pk-all-server/bsicrontask/bsicrontask 10.2.32.103:2379,10.2.32.101:2379,10.2.32.102:2379 /pk/%s.toml add_ip %s", whiteList.MerchantName, ip)
+			command = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config-kp --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, combinedIPStr)
 		case "vn":
 			server = "16.162.63.178"
-			command = fmt.Sprintf("/opt/jenkins/workspace/vn-all-server/bsicrontask/bsicrontask 10.0.3.102:2379,10.0.3.101:2379,10.0.3.103:2379 /vn/%s.toml add_ip %s", whiteList.MerchantName, ip)
+			command = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, combinedIPStr)
 		case "ph":
 			server = "18.167.173.173"
-			command = fmt.Sprintf("/var/lib/jenkins/workspace/php-all-server/bsicrontask/bsicrontask 10.1.3.101:2379,10.1.3.102:2379,10.1.3.103:2379 /ph/%s.toml add_ip %s", whiteList.MerchantName, ip)
+			command = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, combinedIPStr)
 		default:
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":  40000,
-				"error": "无效的国家代码",
+			c.JSON(http.StatusOK, gin.H{
+				"code":    40000,
+				"message": "无效的国家代码,目前只支持，br,ph,vn,pk",
 			})
 			return
 		}
 
 		if err := executeSSHCommand(server, command); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":  50000,
-				"error": err.Error(),
+			log.Println(err.Error())
+			c.JSON(http.StatusOK, gin.H{
+				"code":    50000,
+				"message": "执行远程命令失败",
 			})
 			return
 		}
 
-		// 添加到 WhiteList 表
-		if err := DB.Create(&newWhiteList).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":  50000,
-				"error": err.Error(),
-			})
-			return
+		// Update or create the WhiteList entry
+		if existingWhiteList.MerchantName != "" {
+			existingWhiteList.IP = combinedIPStr
+			if err := DB.Save(&existingWhiteList).Error; err != nil {
+				log.Println(err.Error())
+				c.JSON(http.StatusOK, gin.H{
+					"code":    50000,
+					"message": "更新数据库失败",
+				})
+				return
+			}
+		} else {
+			newWhiteList := WhiteList{
+				MerchantName: merchantName,
+				IP:           combinedIPStr,
+				Country:      whiteList.Country,
+				OpUser:       whiteList.OpUser,
+			}
+			if err := DB.Create(&newWhiteList).Error; err != nil {
+				c.JSON(http.StatusOK, gin.H{
+					"code":    50000,
+					"message": "插入数据库失败",
+				})
+				return
+			}
 		}
 
 		// 记录到 WhitelistLog 表
 		whitelistLog := WhitelistLog{
-			MerchantName: whiteList.MerchantName,
-			IP:           ip,
+			MerchantName: merchantName,
+			IP:           combinedIPStr,
 			Act:          "add",
 			OpUser:       whiteList.OpUser,
 			Model: gorm.Model{
@@ -102,9 +151,10 @@ func whitelistAdd(c *gin.Context) {
 		}
 
 		if err := DB.Create(&whitelistLog).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":  50000,
-				"error": err.Error(),
+			log.Println(err.Error())
+			c.JSON(http.StatusOK, gin.H{
+				"code":    50000,
+				"message": "插入数据库失败",
 			})
 			return
 		}
@@ -121,80 +171,118 @@ func whitelistDelete(c *gin.Context) {
 	var whiteList WhiteList
 	if err := c.ShouldBindJSON(&whiteList); err != nil {
 		c.JSON(http.StatusOK, gin.H{
-			"code":  40000,
-			"error": err.Error(),
+			"code":    40000,
+			"message": "传入的数据格式错误",
 		})
 		return
 	}
 
 	if whiteList.OpUser == "" {
 		c.JSON(http.StatusOK, gin.H{
-			"code":  40000,
-			"error": "未登陆，权限被拒绝",
+			"code":    40000,
+			"message": "未登陆，权限被拒绝",
 		})
 		return
 	}
 
-	// Split the IP addresses
-	ips := strings.Split(whiteList.IP, ",")
+	// ip地址校验
+	err := ValidateWhiteListIPs(whiteList)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    40000,
+			"message": err.Error(),
+		})
+		return
+	}
 
-	// 检测商户名+IP的组合是否存在于 WhiteList 表
-	for _, ip := range ips {
+	// Split the merchant names
+	merchantNames := strings.Split(whiteList.MerchantName, ",")
+
+	// Delete each merchant name with the entire IP list
+	for _, merchantName := range merchantNames {
+		// Retrieve current whitelist IPs for the merchant
 		var existingWhiteList WhiteList
-		if err := DB.Where("merchant_name = ? AND ip = ?", whiteList.MerchantName, ip).First(&existingWhiteList).Error; err != nil {
+		if err := DB.Where("merchant_name = ?", merchantName).First(&existingWhiteList).Error; err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"code":    40400,
-				"message": "商户" + whiteList.MerchantName + "的白名单IP" + ip + "不存在，无需执行删除操作",
+				"message": "商户" + merchantName + "的白名单IP不存在，无需执行删除操作",
 			})
 			return
 		}
-	}
 
-	// 根据 country 值执行不同的命令
-	var server, command string
-	switch whiteList.Country {
-	case "br":
-		server = "15.229.106.224"
-		command = fmt.Sprintf("/data/jenkins/workspace/br-all-server/bsicrontask/bsicrontask 172.31.9.57:2379,172.31.4.34:2379,172.31.9.96:2379 /bs/%s.toml del_ip %s", whiteList.MerchantName, whiteList.IP)
-	case "pk":
-		server = "16.162.63.178"
-		command = fmt.Sprintf("/opt/jenkins/workspace/pk-all-server/bsicrontask/bsicrontask 10.2.32.103:2379,10.2.32.101:2379,10.2.32.102:2379 /pk/%s.toml del_ip %s", whiteList.MerchantName, whiteList.IP)
-	case "vn":
-		server = "16.162.63.178"
-		command = fmt.Sprintf("/opt/jenkins/workspace/vn-all-server/bsicrontask/bsicrontask 10.0.3.102:2379,10.0.3.101:2379,10.0.3.103:2379 /vn/%s.toml del_ip %s", whiteList.MerchantName, whiteList.IP)
-	case "ph":
-		server = "18.167.173.173"
-		command = fmt.Sprintf("/var/lib/jenkins/workspace/php-all-server/bsicrontask/bsicrontask 10.1.3.101:2379,10.1.3.102:2379,10.1.3.103:2379 /ph/%s.toml del_ip %s", whiteList.MerchantName, whiteList.IP)
-	default:
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":  40000,
-			"error": "无效的国家代码",
-		})
-		return
-	}
+		// Remove the specified IPs from the current IP list
+		currentIPs := strings.Split(existingWhiteList.IP, ",")
+		newIPs := strings.Split(whiteList.IP, ",")
 
-	if err := executeSSHCommand(server, command); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":  50000,
-			"error": err.Error(),
-		})
-		return
-	}
+		// Check for non-existent IPs
+		var nonExistentIPs []string
+		for _, newIP := range newIPs {
+			if !contains(currentIPs, newIP) {
+				nonExistentIPs = append(nonExistentIPs, newIP)
+			}
+		}
 
-	// 删除 WhiteList 表中的白名单
-	for _, ip := range ips {
-		if err := DB.Where("merchant_name = ? AND ip = ?", whiteList.MerchantName, ip).Delete(&WhiteList{}).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":  50000,
-				"error": err.Error(),
+		if len(nonExistentIPs) > 0 {
+			c.JSON(http.StatusOK, gin.H{
+				"code":    40000,
+				"message": fmt.Sprintf("以下IP不存在: %s", strings.Join(nonExistentIPs, ", ")),
+			})
+			return
+		}
+
+		remainingIPs := make([]string, 0)
+		for _, ip := range currentIPs {
+			if !contains(newIPs, ip) {
+				remainingIPs = append(remainingIPs, ip)
+			}
+		}
+		remainingIPStr := strings.Join(remainingIPs, ",")
+
+		// 根据 country 值执行不同的命令
+		var server, command string
+		switch whiteList.Country {
+		case "br":
+			server = "15.229.106.224"
+			command = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, remainingIPStr)
+		case "pk":
+			server = "16.162.63.178"
+			command = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config-kp --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, remainingIPStr)
+		case "vn":
+			server = "16.162.63.178"
+			command = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, remainingIPStr)
+		case "ph":
+			server = "18.167.173.173"
+			command = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, remainingIPStr)
+		default:
+			c.JSON(http.StatusOK, gin.H{
+				"code":    40000,
+				"message": "无效的国家代码,目前只支持，br,ph,vn,pk",
+			})
+			return
+		}
+
+		if err := executeSSHCommand(server, command); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"code":    50000,
+				"message": "执行远程命令失败",
+			})
+			return
+		}
+
+		// Update the WhiteList entry
+		existingWhiteList.IP = remainingIPStr
+		if err := DB.Save(&existingWhiteList).Error; err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"code":    50000,
+				"message": "更新数据库失败",
 			})
 			return
 		}
 
 		// 记录到 WhitelistLog 表
 		whitelistLog := WhitelistLog{
-			MerchantName: whiteList.MerchantName,
-			IP:           ip,
+			MerchantName: merchantName,
+			IP:           whiteList.IP,
 			Act:          "del",
 			OpUser:       whiteList.OpUser,
 			Model: gorm.Model{
@@ -203,9 +291,9 @@ func whitelistDelete(c *gin.Context) {
 		}
 
 		if err := DB.Create(&whitelistLog).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":  50000,
-				"error": err.Error(),
+			c.JSON(http.StatusOK, gin.H{
+				"code":    50000,
+				"message": "插入数据库失败",
 			})
 			return
 		}
@@ -215,4 +303,14 @@ func whitelistDelete(c *gin.Context) {
 		"code":    20000,
 		"message": "商户" + whiteList.MerchantName + "的白名单IP" + whiteList.IP + "已删除",
 	})
+}
+
+// Helper function to check if a slice contains a string
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
