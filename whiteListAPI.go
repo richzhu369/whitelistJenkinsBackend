@@ -53,6 +53,7 @@ func whitelistAdd(c *gin.Context) {
 				"code":    50000,
 				"message": "查询数据库失败",
 			})
+			SendToLark(whiteList.Country + "商户" + merchantName + "的白名单IP" + whiteList.IP + "添加失败")
 			return
 		}
 
@@ -118,7 +119,10 @@ func whitelistAdd(c *gin.Context) {
 				"code":    50000,
 				"message": "执行远程命令失败",
 			})
+			SendToLark(whiteList.Country + "商户" + merchantName + "的白名单IP" + whiteList.IP + "添加失败！" + "操作用户:" + whiteList.OpUser)
 			return
+		} else {
+			SendToLark(whiteList.Country + "商户" + merchantName + "的白名单IP" + whiteList.IP + "添加成功！" + "操作用户:" + whiteList.OpUser)
 		}
 
 		// Update or create the WhiteList entry
@@ -275,7 +279,10 @@ func whitelistDelete(c *gin.Context) {
 				"code":    50000,
 				"message": "执行远程命令失败",
 			})
+			SendToLark(whiteList.Country + "商户" + merchantName + "的白名单IP" + whiteList.IP + "删除失败！" + "操作用户:" + whiteList.OpUser)
 			return
+		} else {
+			SendToLark(whiteList.Country + "商户" + merchantName + "的白名单IP" + whiteList.IP + "删除成功！" + "操作用户:" + whiteList.OpUser)
 		}
 
 		// Update the WhiteList entry
