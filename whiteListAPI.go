@@ -11,6 +11,7 @@ import (
 	"time"
 )
 
+// 处理数据，并执行ssh调用go程序，添加白名单到ingress
 func whitelistAdd(c *gin.Context) {
 	log.Println(time.Now().In(time.Local))
 	var whiteList WhiteList
@@ -77,7 +78,15 @@ func whitelistAdd(c *gin.Context) {
 			return
 		}
 
-		combinedIPs := append(currentIPs, newIPs...)
+		// Remove empty strings from currentIPs
+		var validCurrentIPs []string
+		for _, ip := range currentIPs {
+			if ip != "" {
+				validCurrentIPs = append(validCurrentIPs, ip)
+			}
+		}
+
+		combinedIPs := append(validCurrentIPs, newIPs...)
 		combinedIPStr := strings.Join(combinedIPs, ",")
 
 		// 根据 country 值执行不同的命令
