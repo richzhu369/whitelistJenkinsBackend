@@ -15,11 +15,11 @@ func whitelistLogList(c *gin.Context) {
 		OpUser       string `json:"op_user"`
 	}
 
-	// 获得分页信息
+	// Get pagination parameters from query string
 	page := c.DefaultQuery("page", "1")
 	limit := c.DefaultQuery("limit", "20")
 
-	// 转换分页参数为int
+	// Convert page and limit to integers
 	pageInt, err := strconv.Atoi(page)
 	if err != nil || pageInt < 1 {
 		pageInt = 1
@@ -29,11 +29,30 @@ func whitelistLogList(c *gin.Context) {
 		limitInt = 20
 	}
 
-	// 计算偏移量
+	// Calculate offset
 	offset := (pageInt - 1) * limitInt
 
-	// 查询数据库
-	if err := DB.Table("whitelist_logs").Select("created_at, ip, merchant_name, act, op_user").Offset(offset).Limit(limitInt).Scan(&logs).Error; err != nil {
+	// Get search parameters from query string
+	ip := c.DefaultQuery("Ip", "")
+	opUser := c.DefaultQuery("OpUser", "")
+	merchantNumber := c.DefaultQuery("MerchantNumber", "")
+
+	// Build the query with pagination and sorting
+	query := DB.Table("whitelist_logs").Select("created_at, ip, merchant_name, act, op_user").Order("created_at DESC").Offset(offset).Limit(limitInt)
+
+	// Add search conditions to the query
+	if ip != "" {
+		query = query.Where("ip LIKE ?", "%"+ip+"%")
+	}
+	if opUser != "" {
+		query = query.Where("op_user LIKE ?", "%"+opUser+"%")
+	}
+	if merchantNumber != "" {
+		query = query.Where("merchant_name LIKE ?", "%"+merchantNumber+"%")
+	}
+
+	// Execute the query
+	if err := query.Scan(&logs).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":  50000,
 			"error": err.Error(),
@@ -41,9 +60,19 @@ func whitelistLogList(c *gin.Context) {
 		return
 	}
 
-	// 查询总数
+	// Get the total count of filtered logs
 	var total int64
-	if err := DB.Table("whitelist_logs").Count(&total).Error; err != nil {
+	countQuery := DB.Table("whitelist_logs")
+	if ip != "" {
+		countQuery = countQuery.Where("ip LIKE ?", "%"+ip+"%")
+	}
+	if opUser != "" {
+		countQuery = countQuery.Where("op_user LIKE ?", "%"+opUser+"%")
+	}
+	if merchantNumber != "" {
+		countQuery = countQuery.Where("merchant_name LIKE ?", "%"+merchantNumber+"%")
+	}
+	if err := countQuery.Count(&total).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":  50000,
 			"error": err.Error(),
