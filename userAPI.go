@@ -85,8 +85,8 @@ func userInfo(c *gin.Context) {
 
 func userLogout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"code": 20000,
-		"data": "success",
+		"code":    20000,
+		"message": "success",
 	})
 }
 
@@ -124,8 +124,8 @@ func userCreate(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 20000,
-		"data": "用户创建成功",
+		"code":    20000,
+		"message": "用户创建成功",
 	})
 }
 
@@ -165,13 +165,10 @@ func userReset(c *gin.Context) {
 
 	// 进行登录验证逻辑...
 	dbUser := new(User)
-	if err := DB.Where("username = ?", user.Username).First(dbUser).Error; err != nil {
+	if err := DB.Where("username = ?", username).First(dbUser).Error; err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 60000, "message": "用户不存在"})
 		return
 	}
-
-	// 密码验证成功，生成 token 并返回
-	token := "admin-token" // 这里应该是生成的 token
 
 	dbUser.Username = username
 	dbUser.Password = password
@@ -184,11 +181,8 @@ func userReset(c *gin.Context) {
 		DB.Model(&User{}).Where("username = ?", user.Username).Update("LastLoginTime", nowInChina)
 
 		c.JSON(http.StatusOK, gin.H{
-			"code": 20000,
-			"data": gin.H{
-				"token":   token,
-				"message": "修改密码成功",
-			},
+			"code":    20000,
+			"message": "修改密码成功",
 		})
 	} else {
 		// 密码验证失败

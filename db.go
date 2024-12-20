@@ -10,7 +10,7 @@ import (
 type User struct {
 	gorm.Model
 	ID            int       `gorm:"primaryKey"`
-	Username      string    `json:"username" gorm:"size:64;index:idx_username,unique" binding:"required"`
+	Username      string    `json:"username" gorm:"size:64" binding:"required"`
 	Password      string    `json:"password" gorm:"-" binding:"required"`
 	PasswordHash  string    `gorm:"size:128"`
 	LastLoginTime time.Time `gorm:"default:null"`

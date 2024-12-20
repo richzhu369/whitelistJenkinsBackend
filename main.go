@@ -33,7 +33,6 @@ func init() {
 	if ERR != nil {
 		log.Fatal("failed to migrate database: ", ERR)
 	}
-
 }
 
 func main() {
