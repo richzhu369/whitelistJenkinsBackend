@@ -158,6 +158,8 @@ func userReset(c *gin.Context) {
 	username := c.PostForm("username")
 	password := c.PostForm("password")
 
+	fmt.Println(username, password)
+
 	if username == "" {
 		c.JSON(http.StatusOK, gin.H{"error": "用户名不能为空"})
 		return
