@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
+	"log"
 	"net/http"
 )
 
@@ -16,7 +16,7 @@ type LarkMessage struct {
 	} `json:"content"`
 }
 
-func SendToLark(message string) error {
+func SendToLark(message string) {
 	msg := LarkMessage{
 		MsgType: "text",
 	}
@@ -24,18 +24,16 @@ func SendToLark(message string) error {
 
 	data, err := json.Marshal(msg)
 	if err != nil {
-		return err
+		log.Println("序列化消息失败:", err)
 	}
 
 	resp, err := http.Post(webhookURL, "application/json", bytes.NewBuffer(data))
 	if err != nil {
-		return err
+		log.Println("发送消息到lark失败:", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to send message to Lark, status code: %d", resp.StatusCode)
+		log.Println("发送消息到lark失败, 错误代码:", resp.StatusCode)
 	}
-
-	return nil
 }
