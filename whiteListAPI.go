@@ -80,7 +80,7 @@ func executeRemoteCommand(country, merchantName, ipList, action string) error {
 		command2 = fmt.Sprintf("/data/jenkins/workspace/br-all-server/bsicrontask/bsicrontask 172.31.9.57:2379,172.31.4.34:2379,172.31.9.96:2379 /bs/%s.toml %s %s", merchantName, act, ipList)
 	case "pk":
 		server = "16.162.63.178"
-		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, ipList)
+		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config-kp --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, ipList)
 		command2 = fmt.Sprintf("/opt/jenkins/workspace/pk-all-server/bsicrontask/bsicrontask 10.2.32.103:2379,10.2.32.101:2379,10.2.32.102:2379 /pk/%s.toml %s %s", merchantName, act, ipList)
 	case "vn":
 		server = "16.162.63.178"
