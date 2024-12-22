@@ -38,7 +38,7 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 				return "", fmt.Errorf("IP %s 已存在", newIP)
 			}
 		}
-		if existingWhiteList.IP == "" {
+		if len(currentIPs) == 1 && currentIPs[0] == "" {
 			return strings.Join(newIPs, ","), nil
 		}
 		combinedIPs := append(currentIPs, newIPs...)
