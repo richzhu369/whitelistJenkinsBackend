@@ -42,7 +42,7 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 			return strings.Join(newIPs, ","), nil
 		}
 		combinedIPs := append(currentIPs, newIPs...)
-		return strings.Join(combinedIPs, ","), nil
+		return strings.Trim(strings.Join(combinedIPs, ","), ","), nil
 	} else if action == "del" {
 		// 检测不存在IP
 		for _, newIP := range newIPs {
@@ -56,7 +56,7 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 				remainingIPs = append(remainingIPs, ip)
 			}
 		}
-		return strings.Join(remainingIPs, ","), nil
+		return strings.Trim(strings.Join(remainingIPs, ","), ","), nil
 	}
 	return "", fmt.Errorf("操作类型错误")
 }
@@ -64,6 +64,7 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 // 执行远程命令
 func executeRemoteCommand(country, merchantName, ipList, action string) error {
 	var server, command1, command2, act string
+	ipList = strings.TrimPrefix(ipList, ",")
 	switch action {
 	case "add":
 		act = "add_ip"
