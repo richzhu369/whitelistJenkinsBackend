@@ -35,7 +35,7 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 		// 检测重复IP
 		for _, newIP := range newIPs {
 			if contains(currentIPs, newIP) {
-				return "", fmt.Errorf("IP %s 已存在", newIP)
+				return "", fmt.Errorf("商户 %s 的 IP %s 已存在", merchantName, newIP)
 			}
 		}
 		if existingWhiteList.IP == "" {
@@ -47,7 +47,7 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 		// 检测不存在IP
 		for _, newIP := range newIPs {
 			if !contains(currentIPs, newIP) {
-				return "", fmt.Errorf("IP %s 不存在", newIP)
+				return "", fmt.Errorf("商户 %s 的 IP %s 不存在，无需删除", merchantName, newIP)
 			}
 		}
 		remainingIPs := make([]string, 0)
