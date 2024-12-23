@@ -21,7 +21,7 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-// processIps IP地址格式处理与检查是否存在
+// processIPs IP地址格式处理与检查是否存在
 func processIPs(whiteList WhiteList, merchantName string, action string) (string, error) {
 	var existingWhiteList WhiteList
 	if err := DB.Where("merchant_name = ?", merchantName).First(&existingWhiteList).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -62,7 +62,7 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 }
 
 // 执行远程命令
-func executeRemoteCommand(country, merchantName, ipList, action string) error {
+func executeRemoteCommand(country, merchantName, ipList, action string, whiteList WhiteList) error {
 	var server, command1, command2, act string
 	ipList = strings.TrimPrefix(ipList, ",")
 	switch action {
@@ -78,19 +78,19 @@ func executeRemoteCommand(country, merchantName, ipList, action string) error {
 	case "br":
 		server = "15.229.106.224"
 		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, ipList)
-		command2 = fmt.Sprintf("/data/jenkins/workspace/br-all-server/bsicrontask/bsicrontask 172.31.9.57:2379,172.31.4.34:2379,172.31.9.96:2379 /bs/%s.toml %s %s", merchantName, act, ipList)
+		command2 = fmt.Sprintf("/data/jenkins/workspace/br-all-server/bsicrontask/bsicrontask 172.31.9.57:2379,172.31.4.34:2379,172.31.9.96:2379 /bs/%s.toml %s %s", merchantName, act, whiteList.IP)
 	case "pk":
 		server = "16.162.63.178"
 		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config-kp --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, ipList)
-		command2 = fmt.Sprintf("/opt/jenkins/workspace/pk-all-server/bsicrontask/bsicrontask 10.2.32.103:2379,10.2.32.101:2379,10.2.32.102:2379 /pk/%s.toml %s %s", merchantName, act, ipList)
+		command2 = fmt.Sprintf("/opt/jenkins/workspace/pk-all-server/bsicrontask/bsicrontask 10.2.32.103:2379,10.2.32.101:2379,10.2.32.102:2379 /pk/%s.toml %s %s", merchantName, act, whiteList.IP)
 	case "vn":
 		server = "16.162.63.178"
 		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, ipList)
-		command2 = fmt.Sprintf("/opt/jenkins/workspace/vn-all-server/bsicrontask/bsicrontask 10.0.3.102:2379,10.0.3.101:2379,10.0.3.103:2379 /vn/%s.toml %s %s", merchantName, act, ipList)
+		command2 = fmt.Sprintf("/opt/jenkins/workspace/vn-all-server/bsicrontask/bsicrontask 10.0.3.102:2379,10.0.3.101:2379,10.0.3.103:2379 /vn/%s.toml %s %s", merchantName, act, whiteList.IP)
 	case "ph":
 		server = "18.167.173.173"
 		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, ipList)
-		command2 = fmt.Sprintf("/var/lib/jenkins/workspace/php-all-server/bsicrontask/bsicrontask 10.1.3.101:2379,10.1.3.102:2379,10.1.3.103:2379 /ph/%s.toml %s %s", merchantName, act, ipList)
+		command2 = fmt.Sprintf("/var/lib/jenkins/workspace/php-all-server/bsicrontask/bsicrontask 10.1.3.101:2379,10.1.3.102:2379,10.1.3.103:2379 /ph/%s.toml %s %s", merchantName, act, whiteList.IP)
 	default:
 		return fmt.Errorf("错误的国家代码")
 	}
@@ -151,16 +151,15 @@ func updateDatabaseAndLog(whiteList WhiteList, merchantName, ipList, action stri
 	return DB.Create(&whitelistLog).Error
 }
 
-// 添加或删除白名单业务逻辑
-func whitelistModify(c *gin.Context, action string) {
-	log.Println(time.Now().In(time.Local))
+// validateAndRespond performs validation and responds to the client
+func validateAndRespond(c *gin.Context, action string) (WhiteList, error) {
 	var whiteList WhiteList
 	if err := c.ShouldBindJSON(&whiteList); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    40000,
 			"message": "格式错误",
 		})
-		return
+		return whiteList, err
 	}
 
 	if whiteList.OpUser == "" {
@@ -168,7 +167,7 @@ func whitelistModify(c *gin.Context, action string) {
 			"code":    40000,
 			"message": "您未登录，权限被拒绝",
 		})
-		return
+		return whiteList, fmt.Errorf("未登录")
 	}
 
 	// 校验IP地址的格式
@@ -178,63 +177,79 @@ func whitelistModify(c *gin.Context, action string) {
 			"code":    40000,
 			"message": err.Error(),
 		})
-		return
+		return whiteList, err
 	}
 
-	resText := ""
+	var actionText string
 	if action == "add" {
-		resText = "添加"
-	} else if action == "del" {
-		resText = "删除"
-
+		actionText = "添加"
+	} else {
+		actionText = "删除"
 	}
+
+	// Process IPs and check for errors
+	merchantNames := strings.Split(whiteList.MerchantName, ",")
+	for _, merchantName := range merchantNames {
+		_, err := processIPs(whiteList, merchantName, action)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"code":    40000,
+				"message": err.Error(),
+			})
+			return whiteList, err
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    20000,
+		"message": fmt.Sprintf("正在%s白名单，请稍后查看结果", actionText),
+	})
+	return whiteList, nil
+}
+
+// 添加或删除白名单业务逻辑
+func whitelistModify(whiteList WhiteList, action string) {
+	log.Println(time.Now().In(time.Local))
 
 	// 拆分商户，一个商户一个商户的处理
 	merchantNames := strings.Split(whiteList.MerchantName, ",")
 	for _, merchantName := range merchantNames {
 		ipList, err := processIPs(whiteList, merchantName, action)
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"code":    40000,
-				"message": err.Error(),
-			})
+			log.Printf("处理IP失败: %v", err)
+			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, action, whiteList.OpUser))
 			return
 		}
 
-		err = executeRemoteCommand(whiteList.Country, merchantName, ipList, action)
+		err = executeRemoteCommand(whiteList.Country, merchantName, ipList, action, whiteList)
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"code":    50000,
-				"message": "执行远程命令失败",
-			})
-			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, resText, whiteList.OpUser))
+			log.Printf("执行远程命令失败: %v", err)
+			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, action, whiteList.OpUser))
 			return
 		} else {
-			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s成功! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, resText, whiteList.OpUser))
+			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s成功! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, action, whiteList.OpUser))
 		}
 
 		err = updateDatabaseAndLog(whiteList, merchantName, ipList, action)
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"code":    50000,
-				"message": "更新数据库失败",
-			})
+			log.Printf("更新数据库失败: %v", err)
 			return
 		}
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    20000,
-		"message": fmt.Sprintf("商户%s 白名单IP %s %s成功", whiteList.MerchantName, whiteList.IP, resText),
-	})
 }
 
 // 添加白名单入口
 func whitelistAdd(c *gin.Context) {
-	whitelistModify(c, "add")
+	whiteList, err := validateAndRespond(c, "add")
+	if err == nil {
+		go whitelistModify(whiteList, "add")
+	}
 }
 
 // 删除白名单入口
 func whitelistDelete(c *gin.Context) {
-	whitelistModify(c, "del")
+	whiteList, err := validateAndRespond(c, "del")
+	if err == nil {
+		go whitelistModify(whiteList, "del")
+	}
 }
