@@ -67,90 +67,165 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 	failedIPs := make([]string, 0)
 	validNewIPs := make([]string, 0)
 
+	// 将 currentIPs 转换为 /48 前缀
+	maskedCurrentIPs := make([]string, 0, len(currentIPs))
+	for _, ip := range currentIPs {
+		maskedIP, err := applyMaskToIPv6Single(ip)
+		if err != nil {
+			log.Printf("转换当前IP %s 为 /48 前缀失败: %v", ip, err)
+			continue // 忽略转换失败的IP
+		}
+		maskedCurrentIPs = append(maskedCurrentIPs, maskedIP)
+	}
+
+	// 关键修改：在函数开始处声明 newIPList
+	var newIPList string
+
 	if action == "add" {
 		for _, newIP := range newIPs {
-			if contains(currentIPs, newIP) {
+			newIP = strings.TrimSpace(newIP)
+			maskedNewIP, err := applyMaskToIPv6Single(newIP) // 将新IP转换为 /48 前缀
+			if err != nil {
+				log.Printf("转换新IP %s 为 /48 前缀失败: %v", newIP, err)
+				failedIPs = append(failedIPs, newIP) //转换失败的IP加入到失败列表
+				continue
+			}
+			if contains(maskedCurrentIPs, maskedNewIP) { // 使用转换后的前缀进行比较
 				failedIPs = append(failedIPs, newIP)
 				continue
 			}
 			validNewIPs = append(validNewIPs, newIP)
 		}
+
+		if len(validNewIPs) > 0 {
+			if existingWhiteList.IP == "" {
+				newIPList = strings.Join(validNewIPs, "\n")
+			} else {
+				combinedIPs := append(currentIPs, validNewIPs...)
+				uniqueIPs := removeDuplicateValues(combinedIPs)
+				newIPList = strings.Join(uniqueIPs, "\n")
+			}
+		}
+		if len(failedIPs) > 0 {
+			message := fmt.Sprintf("%s 商户 %s 的 IP %s 已存在 操作用户: %s", whiteList.Country, merchantName, strings.Join(failedIPs, ","), whiteList.OpUser)
+			sendLarkMessage(message)
+		}
+
 	} else if action == "del" {
 		for _, newIP := range newIPs {
-			if !contains(currentIPs, newIP) {
+			newIP = strings.TrimSpace(newIP)
+			maskedNewIP, err := applyMaskToIPv6Single(newIP)
+			if err != nil {
+				log.Printf("转换要删除的IP %s 为 /48 前缀失败: %v", newIP, err)
+				failedIPs = append(failedIPs, newIP) //转换失败的IP加入到失败列表
+				continue
+			}
+
+			if !contains(maskedCurrentIPs, maskedNewIP) { // 使用转换后的前缀进行比较
 				failedIPs = append(failedIPs, newIP)
 				continue
 			}
 			validNewIPs = append(validNewIPs, newIP)
 		}
+		if len(failedIPs) > 0 {
+			message := fmt.Sprintf("%s 商户 %s 的 IP %s 不存在，无法删除 操作用户: %s", whiteList.Country, merchantName, strings.Join(failedIPs, ","), whiteList.OpUser)
+			sendLarkMessage(message)
+		}
+
+		// 正确地使用 /48 前缀构建 remainingIPs 列表
+		remainingIPs := make([]string, 0, len(currentIPs))
+		for _, currentIP := range currentIPs {
+			maskedCurrentIP, err := applyMaskToIPv6Single(currentIP)
+			if err != nil {
+				log.Printf("转换数据库中IP %s 为 /48 前缀失败: %v", currentIP, err)
+				remainingIPs = append(remainingIPs, currentIP) //转换失败也保留
+				continue
+			}
+			shouldKeep := true
+			for _, ipToDelete := range validNewIPs {
+				maskedIPToDelete, err := applyMaskToIPv6Single(ipToDelete)
+				if err != nil {
+					log.Printf("转换要删除的IP %s 为 /48 前缀失败: %v", ipToDelete, err)
+					continue
+				}
+				if maskedCurrentIP == maskedIPToDelete {
+					shouldKeep = false
+					break
+				}
+			}
+			if shouldKeep {
+				remainingIPs = append(remainingIPs, currentIP)
+			}
+		}
+		uniqueIPs := removeDuplicateValues(remainingIPs)
+		newIPList = strings.Join(uniqueIPs, "\n")
 	} else {
 		return "", nil, false, fmt.Errorf("操作类型错误")
 	}
 
-	if len(failedIPs) > 0 {
-		message := fmt.Sprintf("%s 商户 %s 的 IP %s 已存在 操作用户: %s", whiteList.Country, merchantName, strings.Join(failedIPs, ","), whiteList.OpUser)
-
-		muLarkSent.Lock()
-		if _, ok := larkSent[message]; !ok {
-			larkChannel <- message
-			larkSent[message] = true
-			go func() {
-				time.Sleep(500 * time.Millisecond)
-				muLarkSent.Lock()
-				delete(larkSent, message)
-				muLarkSent.Unlock()
-			}()
-		}
-		muLarkSent.Unlock()
-	}
-
 	if len(validNewIPs) == 0 {
-		return "", nil, false, nil // 返回 nil 的 validNewIPs
+		return "", nil, false, nil
 	}
 
-	var newIPList string
-	if action == "add" {
-		if existingWhiteList.IP == "" {
-			newIPList = strings.Join(validNewIPs, "\n")
-		} else {
-			combinedIPs := append(currentIPs, validNewIPs...)
-			newIPList = strings.Join(combinedIPs, "\n")
-		}
-	} else {
-		remainingIPs := make([]string, 0)
-		for _, ip := range currentIPs {
-			if !contains(validNewIPs, ip) {
-				remainingIPs = append(remainingIPs, ip)
-			}
-		}
-		newIPList = strings.Join(remainingIPs, "\n")
-	}
+	newIPList = strings.TrimSpace(newIPList)
 
 	hasValidIPs := true
-	if newIPList == existingWhiteList.IP {
+	if newIPList == strings.TrimSpace(existingWhiteList.IP) {
 		hasValidIPs = false
 	}
 
-	return newIPList, validNewIPs, hasValidIPs, nil // 返回 newIPList, validNewIPs, hasValidIPs
+	return newIPList, validNewIPs, hasValidIPs, nil
 }
 
+// sendLarkMessage 发送Lark消息的函数，包含去重逻辑
+func sendLarkMessage(message string) {
+	muLarkSent.Lock()
+	if _, ok := larkSent[message]; !ok {
+		larkChannel <- message
+		larkSent[message] = true
+		go func() {
+			time.Sleep(1000 * time.Millisecond)
+			muLarkSent.Lock()
+			delete(larkSent, message)
+			muLarkSent.Unlock()
+		}()
+	}
+	muLarkSent.Unlock()
+}
+
+// applyMaskToIPv6Single 单个ip转换/48
+func applyMaskToIPv6Single(ipStr string) (string, error) {
+	ipStr = strings.TrimSpace(ipStr)
+	//处理ipv6地址包含/的情况
+	if strings.Contains(ipStr, "/") {
+		ipStr = strings.Split(ipStr, "/")[0]
+	}
+	if ip, err := netip.ParseAddr(ipStr); err == nil && ip.Is6() {
+		prefix, err := ip.Prefix(48)
+		if err != nil {
+			return "", fmt.Errorf("Failed to create prefix for %s: %w", ipStr, err)
+		}
+		return prefix.String(), nil
+	} else if err != nil {
+		return "", fmt.Errorf("ParseAddr(%q): %w", ipStr, err) // 包含原始错误信息
+	} else {
+		return ipStr, nil // 不是IPv6地址，直接返回
+	}
+}
+
+// applyMaskToIPv6 applies a /48 mask to IPv6 addresses in a comma-separated list
 func applyMaskToIPv6(ipList string) string {
 	ips := strings.Split(ipList, ",")
 	var maskedIPs []string
 
 	for _, ipStr := range ips {
-		ipStr = strings.TrimSpace(ipStr)
-		if ip, err := netip.ParseAddr(ipStr); err == nil && ip.Is6() {
-			prefix, err := ip.Prefix(48) // Correctly handle the error
-			if err != nil {
-				log.Printf("Failed to create prefix for %s: %v", ipStr, err)
-				maskedIPs = append(maskedIPs, ipStr) // If there's an error creating the prefix, keep original IP
-				continue
-			}
-			maskedIPs = append(maskedIPs, prefix.String())
-		} else {
-			maskedIPs = append(maskedIPs, ipStr)
+		maskedIP, err := applyMaskToIPv6Single(ipStr)
+		if err != nil {
+			log.Printf("转换IP %s 为 /48 前缀失败: %v", ipStr, err)
+			maskedIPs = append(maskedIPs, ipStr) // 保留原始IP，避免丢失数据
+			continue
 		}
+		maskedIPs = append(maskedIPs, maskedIP)
 	}
 	return strings.Join(maskedIPs, ",")
 }
@@ -247,6 +322,20 @@ func updateDatabaseAndLog(whiteList WhiteList, merchantName, ipList, action stri
 		},
 	}
 	return DB.Create(&whitelistLog).Error
+}
+
+// 去除重复元素
+func removeDuplicateValues(intSlice []string) []string {
+	keys := make(map[string]bool)
+	list := []string{}
+
+	for _, entry := range intSlice {
+		if _, value := keys[entry]; !value {
+			keys[entry] = true
+			list = append(list, entry)
+		}
+	}
+	return list
 }
 
 // validateAndRespond 验证并响应
