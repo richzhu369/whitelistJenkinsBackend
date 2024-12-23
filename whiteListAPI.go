@@ -54,10 +54,10 @@ func contains(slice []string, item string) bool {
 }
 
 // processIPs IP地址格式处理与检查是否存在
-func processIPs(whiteList WhiteList, merchantName string, action string) (string, bool, error) {
+func processIPs(whiteList WhiteList, merchantName string, action string) (string, []string, bool, error) {
 	var existingWhiteList WhiteList
 	if err := DB.Where("merchant_name = ?", merchantName).First(&existingWhiteList).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return "", false, fmt.Errorf("查询数据库失败: %w", err) // Wrap error for better context
+		return "", nil, false, fmt.Errorf("查询数据库失败: %w", err)
 	}
 
 	currentIPs := strings.Split(existingWhiteList.IP, "\n")
@@ -83,18 +83,18 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 			validNewIPs = append(validNewIPs, newIP)
 		}
 	} else {
-		return "", false, fmt.Errorf("操作类型错误")
+		return "", nil, false, fmt.Errorf("操作类型错误")
 	}
 
 	if len(failedIPs) > 0 {
-		message := fmt.Sprintf("商户 %s 的 IP %s 已存在", merchantName, strings.Join(failedIPs, ","))
+		message := fmt.Sprintf("商户 %s 的 IP %s 已存在 操作用户: %s", merchantName, strings.Join(failedIPs, ","), whiteList.OpUser)
 
 		muLarkSent.Lock()
 		if _, ok := larkSent[message]; !ok {
-			larkChannel <- message // 通过通道发送消息
+			larkChannel <- message
 			larkSent[message] = true
-			go func() { // 定时清理已发送的消息记录，防止内存无限增长
-				time.Sleep(5 * time.Minute) // 5 分钟后清理
+			go func() {
+				time.Sleep(5 * time.Minute)
 				muLarkSent.Lock()
 				delete(larkSent, message)
 				muLarkSent.Unlock()
@@ -104,7 +104,7 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 	}
 
 	if len(validNewIPs) == 0 {
-		return "", false, nil
+		return "", nil, false, nil // 返回 nil 的 validNewIPs
 	}
 
 	var newIPList string
@@ -115,7 +115,7 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 			combinedIPs := append(currentIPs, validNewIPs...)
 			newIPList = strings.Join(combinedIPs, "\n")
 		}
-	} else { // action == "del"
+	} else {
 		remainingIPs := make([]string, 0)
 		for _, ip := range currentIPs {
 			if !contains(validNewIPs, ip) {
@@ -130,15 +130,18 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 		hasValidIPs = false
 	}
 
-	return newIPList, hasValidIPs, nil
+	return newIPList, validNewIPs, hasValidIPs, nil // 返回 newIPList, validNewIPs, hasValidIPs
 }
 
 // 执行远程命令
-func executeRemoteCommand(country, merchantName, ipList, action string, whiteList WhiteList) error {
+func executeRemoteCommand(country, merchantName, ipList string, validNewIPs []string, action string, whiteList WhiteList) error {
 	fmt.Println("商户名：", merchantName)
 	var server, command1, command2, act string
+
 	ipList = strings.ReplaceAll(ipList, "\n", ",")
-	whiteListIP := strings.ReplaceAll(whiteList.IP, "\n", ",")
+
+	whiteListIP := strings.Join(validNewIPs, ",") // 使用 validNewIPs 构建 whiteListIP
+
 	switch action {
 	case "add":
 		act = "add_ip"
@@ -170,15 +173,13 @@ func executeRemoteCommand(country, merchantName, ipList, action string, whiteLis
 	}
 
 	// 执行修改ingress的白名单
-	log.Printf("执行命令: %s", command1)
 	if err := executeSSHCommand(server, command1); err != nil {
-		return err
+		return fmt.Errorf("执行命令1失败: %w", err) // 包装错误
 	}
 
 	// 执行后端程序加白
-	log.Printf("执行命令: %s", command2)
 	if err := executeSSHCommand(server, command2); err != nil {
-		return err
+		return fmt.Errorf("执行命令2失败: %w", err) // 包装错误
 	}
 
 	return nil
@@ -228,6 +229,7 @@ func updateDatabaseAndLog(whiteList WhiteList, merchantName, ipList, action stri
 }
 
 // validateAndRespond performs validation and responds to the client
+// validateAndRespond performs validation and responds to the client
 func validateAndRespond(c *gin.Context, action string) (WhiteList, error) {
 	var whiteList WhiteList
 	if err := c.ShouldBindJSON(&whiteList); err != nil {
@@ -266,7 +268,7 @@ func validateAndRespond(c *gin.Context, action string) (WhiteList, error) {
 	// Process IPs and check for errors
 	merchantNames := strings.Split(whiteList.MerchantName, ",")
 	for _, merchantName := range merchantNames {
-		_, _, err := processIPs(whiteList, merchantName, action)
+		_, _, _, err := processIPs(whiteList, merchantName, action) // Capture all 4 return values
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"code":    40000,
@@ -296,12 +298,13 @@ func whitelistModify(whiteList WhiteList, action string) {
 		processing[merchantName] = true
 		mu.Unlock()
 
-		ipList, hasValidIPs, err := processIPs(whiteList, merchantName, action)
+		ipList, validNewIPs, hasValidIPs, err := processIPs(whiteList, merchantName, action) // 获取 validNewIPs
 		if err != nil {
 			log.Printf("处理IP失败: %v", err)
 			mu.Lock()
 			delete(processing, merchantName)
 			mu.Unlock()
+			processNextRequest(merchantName) // 处理下一个请求
 			return
 		}
 
@@ -309,6 +312,7 @@ func whitelistModify(whiteList WhiteList, action string) {
 			mu.Lock()
 			delete(processing, merchantName)
 			mu.Unlock()
+			processNextRequest(merchantName) // 处理下一个请求
 			return
 		}
 
@@ -319,13 +323,14 @@ func whitelistModify(whiteList WhiteList, action string) {
 			resText = "删除"
 		}
 
-		err = executeRemoteCommand(whiteList.Country, merchantName, ipList, action, whiteList)
+		err = executeRemoteCommand(whiteList.Country, merchantName, ipList, validNewIPs, action, whiteList) // 传递 validNewIPs
 		if err != nil {
 			log.Printf("执行远程命令失败: %v", err)
 			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, ipList, resText, whiteList.OpUser))
 			mu.Lock()
 			delete(processing, merchantName)
 			mu.Unlock()
+			processNextRequest(merchantName) // 处理下一个请求
 			return
 		} else {
 			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s成功! 操作用户: %s", whiteList.Country, merchantName, ipList, resText, whiteList.OpUser))
@@ -337,6 +342,7 @@ func whitelistModify(whiteList WhiteList, action string) {
 			mu.Lock()
 			delete(processing, merchantName)
 			mu.Unlock()
+			processNextRequest(merchantName) // 处理下一个请求
 			return
 		}
 
