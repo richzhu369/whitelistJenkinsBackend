@@ -95,7 +95,7 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 			larkChannel <- message
 			larkSent[message] = true
 			go func() {
-				time.Sleep(5 * time.Minute)
+				time.Sleep(500 * time.Millisecond)
 				muLarkSent.Lock()
 				delete(larkSent, message)
 				muLarkSent.Unlock()
@@ -155,7 +155,6 @@ func applyMaskToIPv6(ipList string) string {
 	return strings.Join(maskedIPs, ",")
 }
 
-// 执行远程命令
 // 执行远程命令
 func executeRemoteCommand(country, merchantName, ipList string, validNewIPs []string, action string, whiteList WhiteList) error {
 	fmt.Println("商户名：", merchantName)
