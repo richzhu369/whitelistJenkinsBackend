@@ -8,8 +8,37 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
+
+type Request struct {
+	WhiteList WhiteList
+	Action    string
+}
+
+var (
+	merchantQueue = make(map[string][]Request)
+	processing    = make(map[string]bool)
+	mu            sync.Mutex
+)
+
+func processNextRequest(merchantName string) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(merchantQueue[merchantName]) == 0 {
+		delete(processing, merchantName)
+		return
+	}
+
+	req := merchantQueue[merchantName][0]
+	merchantQueue[merchantName] = merchantQueue[merchantName][1:]
+
+	go func() {
+		whitelistModify(req.WhiteList, req.Action)
+	}()
+}
 
 // 对比ip是否在列表中
 func contains(slice []string, item string) bool {
@@ -210,30 +239,53 @@ func validateAndRespond(c *gin.Context, action string) (WhiteList, error) {
 func whitelistModify(whiteList WhiteList, action string) {
 	log.Println(time.Now().In(time.Local))
 
-	// 拆分商户，一个商户一个商户的处理
 	merchantNames := strings.Split(whiteList.MerchantName, ",")
 	for _, merchantName := range merchantNames {
+		mu.Lock()
+		if processing[merchantName] {
+			merchantQueue[merchantName] = append(merchantQueue[merchantName], Request{WhiteList: whiteList, Action: action})
+			mu.Unlock()
+			return
+		}
+		processing[merchantName] = true
+		mu.Unlock()
+
 		ipList, err := processIPs(whiteList, merchantName, action)
 		if err != nil {
 			log.Printf("处理IP失败: %v", err)
-			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, action, whiteList.OpUser))
+			//SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, action, whiteList.OpUser))
+			mu.Lock()
+			delete(processing, merchantName)
+			mu.Unlock()
 			return
 		}
 
 		err = executeRemoteCommand(whiteList.Country, merchantName, ipList, action, whiteList)
 		if err != nil {
 			log.Printf("执行远程命令失败: %v", err)
-			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, action, whiteList.OpUser))
+			//SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, action, whiteList.OpUser))
+			mu.Lock()
+			delete(processing, merchantName)
+			mu.Unlock()
 			return
 		} else {
-			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s成功! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, action, whiteList.OpUser))
+			//SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s成功! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, action, whiteList.OpUser))
 		}
 
 		err = updateDatabaseAndLog(whiteList, merchantName, ipList, action)
 		if err != nil {
 			log.Printf("更新数据库失败: %v", err)
+			mu.Lock()
+			delete(processing, merchantName)
+			mu.Unlock()
 			return
 		}
+
+		mu.Lock()
+		delete(processing, merchantName)
+		mu.Unlock()
+
+		processNextRequest(merchantName)
 	}
 }
 
