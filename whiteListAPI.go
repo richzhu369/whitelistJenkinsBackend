@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -71,6 +72,13 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 			if contains(currentIPs, newIP) {
 				failedIPs = append(failedIPs, newIP)
 				continue
+			}
+			// Check if the IP is IPv6 and apply a 48-bit mask
+			if ip := net.ParseIP(newIP); ip != nil && ip.To4() == nil {
+				segments := strings.Split(newIP, ":")
+				if len(segments) >= 3 {
+					newIP = fmt.Sprintf("%s:%s:%s::/48", segments[0], segments[1], segments[2])
+				}
 			}
 			validNewIPs = append(validNewIPs, newIP)
 		}
@@ -324,9 +332,9 @@ func whitelistModify(whiteList WhiteList, action string) {
 		}
 
 		err = executeRemoteCommand(whiteList.Country, merchantName, ipList, validNewIPs, action, whiteList)
+		validNewIPsStr := strings.Join(validNewIPs, ",")
 		if err != nil {
-			log.Printf("执行远程命令失败: %v", err)
-			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, ipList, resText, whiteList.OpUser))
+			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, validNewIPsStr, resText, whiteList.OpUser))
 			mu.Lock()
 			delete(processing, merchantName)
 			mu.Unlock()
@@ -334,7 +342,6 @@ func whitelistModify(whiteList WhiteList, action string) {
 			return
 		} else {
 			// Corrected Lark message construction: use validNewIPs
-			validNewIPsStr := strings.Join(validNewIPs, ",") // Format validNewIPs for the message
 			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s成功! 操作用户: %s", whiteList.Country, merchantName, validNewIPsStr, resText, whiteList.OpUser))
 		}
 
