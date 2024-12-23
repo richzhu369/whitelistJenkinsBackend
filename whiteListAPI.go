@@ -6,8 +6,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	"log"
-	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -73,13 +73,6 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 				failedIPs = append(failedIPs, newIP)
 				continue
 			}
-			// Check if the IP is IPv6 and apply a 48-bit mask
-			if ip := net.ParseIP(newIP); ip != nil && ip.To4() == nil {
-				segments := strings.Split(newIP, ":")
-				if len(segments) >= 3 {
-					newIP = fmt.Sprintf("%s:%s:%s::/48", segments[0], segments[1], segments[2])
-				}
-			}
 			validNewIPs = append(validNewIPs, newIP)
 		}
 	} else if action == "del" {
@@ -141,14 +134,35 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 	return newIPList, validNewIPs, hasValidIPs, nil // 返回 newIPList, validNewIPs, hasValidIPs
 }
 
+func applyMaskToIPv6(ipList string) string {
+	ips := strings.Split(ipList, ",")
+	var maskedIPs []string
+
+	for _, ipStr := range ips {
+		ipStr = strings.TrimSpace(ipStr)
+		if ip, err := netip.ParseAddr(ipStr); err == nil && ip.Is6() {
+			prefix, err := ip.Prefix(48) // Correctly handle the error
+			if err != nil {
+				log.Printf("Failed to create prefix for %s: %v", ipStr, err)
+				maskedIPs = append(maskedIPs, ipStr) // If there's an error creating the prefix, keep original IP
+				continue
+			}
+			maskedIPs = append(maskedIPs, prefix.String())
+		} else {
+			maskedIPs = append(maskedIPs, ipStr)
+		}
+	}
+	return strings.Join(maskedIPs, ",")
+}
+
+// 执行远程命令
 // 执行远程命令
 func executeRemoteCommand(country, merchantName, ipList string, validNewIPs []string, action string, whiteList WhiteList) error {
 	fmt.Println("商户名：", merchantName)
 	var server, command1, command2, act string
 
 	ipList = strings.ReplaceAll(ipList, "\n", ",")
-
-	whiteListIP := strings.Join(validNewIPs, ",") // 使用 validNewIPs 构建 whiteListIP
+	whiteListIP := strings.Join(validNewIPs, ",")
 
 	switch action {
 	case "add":
@@ -162,32 +176,32 @@ func executeRemoteCommand(country, merchantName, ipList string, validNewIPs []st
 	switch country {
 	case "br":
 		server = "15.229.106.224"
-		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, ipList)
-		command2 = fmt.Sprintf("/data/jenkins/workspace/br-all-server/bsicrontask/bsicrontask 172.31.9.57:2379,172.31.4.34:2379,172.31.9.96:2379 /bs/%s.toml %s %s", merchantName, act, whiteListIP)
+		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, applyMaskToIPv6(ipList))  // command1 应用掩码
+		command2 = fmt.Sprintf("/data/jenkins/workspace/br-all-server/bsicrontask/bsicrontask 172.31.9.57:2379,172.31.4.34:2379,172.31.9.96:2379 /bs/%s.toml %s %s", merchantName, act, whiteListIP) // command2 不应用掩码
 	case "pk":
 		server = "16.162.63.178"
-		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config-kp --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, ipList)
-		command2 = fmt.Sprintf("/opt/jenkins/workspace/pk-all-server/bsicrontask/bsicrontask 10.2.32.103:2379,10.2.32.101:2379,10.2.32.102:2379 /pk/%s.toml %s %s", merchantName, act, whiteListIP)
+		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config-kp --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, applyMaskToIPv6(ipList)) // command1 应用掩码
+		command2 = fmt.Sprintf("/opt/jenkins/workspace/pk-all-server/bsicrontask/bsicrontask 10.2.32.103:2379,10.2.32.101:2379,10.2.32.102:2379 /pk/%s.toml %s %s", merchantName, act, whiteListIP)    // command2 不应用掩码
 	case "vn":
 		server = "16.162.63.178"
-		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, ipList)
-		command2 = fmt.Sprintf("/opt/jenkins/workspace/vn-all-server/bsicrontask/bsicrontask 10.0.3.102:2379,10.0.3.101:2379,10.0.3.103:2379 /vn/%s.toml %s %s", merchantName, act, whiteListIP)
+		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, applyMaskToIPv6(ipList)) // command1 应用掩码
+		command2 = fmt.Sprintf("/opt/jenkins/workspace/vn-all-server/bsicrontask/bsicrontask 10.0.3.102:2379,10.0.3.101:2379,10.0.3.103:2379 /vn/%s.toml %s %s", merchantName, act, whiteListIP)    // command2 不应用掩码
 	case "ph":
 		server = "18.167.173.173"
-		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, ipList)
-		command2 = fmt.Sprintf("/var/lib/jenkins/workspace/php-all-server/bsicrontask/bsicrontask 10.1.3.101:2379,10.1.3.102:2379,10.1.3.103:2379 /ph/%s.toml %s %s", merchantName, act, whiteListIP)
+		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, applyMaskToIPv6(ipList))   // command1 应用掩码
+		command2 = fmt.Sprintf("/var/lib/jenkins/workspace/php-all-server/bsicrontask/bsicrontask 10.1.3.101:2379,10.1.3.102:2379,10.1.3.103:2379 /ph/%s.toml %s %s", merchantName, act, whiteListIP) // command2 不应用掩码
 	default:
 		return fmt.Errorf("错误的国家代码")
 	}
 
 	// 执行修改ingress的白名单
 	if err := executeSSHCommand(server, command1); err != nil {
-		return fmt.Errorf("执行命令1失败: %w", err) // 包装错误
+		return fmt.Errorf("执行命令1失败: %w", err)
 	}
 
 	// 执行后端程序加白
 	if err := executeSSHCommand(server, command2); err != nil {
-		return fmt.Errorf("执行命令2失败: %w", err) // 包装错误
+		return fmt.Errorf("执行命令2失败: %w", err)
 	}
 
 	return nil
@@ -236,8 +250,7 @@ func updateDatabaseAndLog(whiteList WhiteList, merchantName, ipList, action stri
 	return DB.Create(&whitelistLog).Error
 }
 
-// validateAndRespond performs validation and responds to the client
-// validateAndRespond performs validation and responds to the client
+// validateAndRespond 验证并响应
 func validateAndRespond(c *gin.Context, action string) (WhiteList, error) {
 	var whiteList WhiteList
 	if err := c.ShouldBindJSON(&whiteList); err != nil {
@@ -273,7 +286,7 @@ func validateAndRespond(c *gin.Context, action string) (WhiteList, error) {
 		actionText = "删除"
 	}
 
-	// Process IPs and check for errors
+	// 处理多个商户名
 	merchantNames := strings.Split(whiteList.MerchantName, ",")
 	for _, merchantName := range merchantNames {
 		_, _, _, err := processIPs(whiteList, merchantName, action) // Capture all 4 return values
