@@ -253,23 +253,29 @@ func whitelistModify(whiteList WhiteList, action string) {
 		ipList, err := processIPs(whiteList, merchantName, action)
 		if err != nil {
 			log.Printf("处理IP失败: %v", err)
-			//SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, action, whiteList.OpUser))
 			mu.Lock()
 			delete(processing, merchantName)
 			mu.Unlock()
 			return
 		}
 
+		resText := ""
+		if action == "add" {
+			resText = fmt.Sprintf("%s商户%s 白名单IP %s %s", whiteList.Country, merchantName, whiteList.IP, action)
+		} else {
+			resText = fmt.Sprintf("%s商户%s 白名单IP %s %s", whiteList.Country, merchantName, whiteList.IP, action)
+		}
+
 		err = executeRemoteCommand(whiteList.Country, merchantName, ipList, action, whiteList)
 		if err != nil {
 			log.Printf("执行远程命令失败: %v", err)
-			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, action, whiteList.OpUser))
+			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, resText, whiteList.OpUser))
 			mu.Lock()
 			delete(processing, merchantName)
 			mu.Unlock()
 			return
 		} else {
-			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s成功! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, action, whiteList.OpUser))
+			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s成功! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, resText, whiteList.OpUser))
 		}
 
 		err = updateDatabaseAndLog(whiteList, merchantName, ipList, action)
