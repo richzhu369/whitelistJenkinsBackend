@@ -33,6 +33,8 @@ func init() {
 	if ERR != nil {
 		log.Fatal("failed to migrate database: ", ERR)
 	}
+
+	go handleLarkMessages()
 }
 
 func main() {

@@ -21,6 +21,9 @@ var (
 	merchantQueue = make(map[string][]Request)
 	processing    = make(map[string]bool)
 	mu            sync.Mutex
+	larkChannel   = make(chan string)     // 用于发送 Lark 消息的通道
+	larkSent      = make(map[string]bool) // 记录是否已发送过 Lark 消息
+	muLarkSent    sync.Mutex              // 保护 larkSent 的互斥锁
 )
 
 func processNextRequest(merchantName string) {
@@ -51,48 +54,91 @@ func contains(slice []string, item string) bool {
 }
 
 // processIPs IP地址格式处理与检查是否存在
-func processIPs(whiteList WhiteList, merchantName string, action string) (string, error) {
+func processIPs(whiteList WhiteList, merchantName string, action string) (string, bool, error) {
 	var existingWhiteList WhiteList
 	if err := DB.Where("merchant_name = ?", merchantName).First(&existingWhiteList).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return "", err
+		return "", false, fmt.Errorf("查询数据库失败: %w", err) // Wrap error for better context
 	}
 
-	currentIPs := strings.Split(existingWhiteList.IP, ",")
-	newIPs := strings.Split(whiteList.IP, ",")
+	currentIPs := strings.Split(existingWhiteList.IP, "\n")
+	newIPs := strings.Split(whiteList.IP, "\n")
+
+	failedIPs := make([]string, 0)
+	validNewIPs := make([]string, 0)
 
 	if action == "add" {
-		// 检测重复IP
 		for _, newIP := range newIPs {
 			if contains(currentIPs, newIP) {
-				return "", fmt.Errorf("商户 %s 的 IP %s 已存在", merchantName, newIP)
+				failedIPs = append(failedIPs, newIP)
+				continue
 			}
+			validNewIPs = append(validNewIPs, newIP)
 		}
-		if existingWhiteList.IP == "" {
-			return strings.Join(newIPs, ","), nil
-		}
-		combinedIPs := append(currentIPs, newIPs...)
-		return strings.Join(combinedIPs, ","), nil
 	} else if action == "del" {
-		// 检测不存在IP
 		for _, newIP := range newIPs {
 			if !contains(currentIPs, newIP) {
-				return "", fmt.Errorf("商户 %s 的 IP %s 不存在，无需删除", merchantName, newIP)
+				failedIPs = append(failedIPs, newIP)
+				continue
 			}
+			validNewIPs = append(validNewIPs, newIP)
 		}
+	} else {
+		return "", false, fmt.Errorf("操作类型错误")
+	}
+
+	if len(failedIPs) > 0 {
+		message := fmt.Sprintf("商户 %s 的 IP %s 已存在", merchantName, strings.Join(failedIPs, ","))
+
+		muLarkSent.Lock()
+		if _, ok := larkSent[message]; !ok {
+			larkChannel <- message // 通过通道发送消息
+			larkSent[message] = true
+			go func() { // 定时清理已发送的消息记录，防止内存无限增长
+				time.Sleep(5 * time.Minute) // 5 分钟后清理
+				muLarkSent.Lock()
+				delete(larkSent, message)
+				muLarkSent.Unlock()
+			}()
+		}
+		muLarkSent.Unlock()
+	}
+
+	if len(validNewIPs) == 0 {
+		return "", false, nil
+	}
+
+	var newIPList string
+	if action == "add" {
+		if existingWhiteList.IP == "" {
+			newIPList = strings.Join(validNewIPs, "\n")
+		} else {
+			combinedIPs := append(currentIPs, validNewIPs...)
+			newIPList = strings.Join(combinedIPs, "\n")
+		}
+	} else { // action == "del"
 		remainingIPs := make([]string, 0)
 		for _, ip := range currentIPs {
-			if !contains(newIPs, ip) {
+			if !contains(validNewIPs, ip) {
 				remainingIPs = append(remainingIPs, ip)
 			}
 		}
-		return strings.Join(remainingIPs, ","), nil
+		newIPList = strings.Join(remainingIPs, "\n")
 	}
-	return "", fmt.Errorf("操作类型错误")
+
+	hasValidIPs := true
+	if newIPList == existingWhiteList.IP {
+		hasValidIPs = false
+	}
+
+	return newIPList, hasValidIPs, nil
 }
 
 // 执行远程命令
 func executeRemoteCommand(country, merchantName, ipList, action string, whiteList WhiteList) error {
+	fmt.Println("商户名：", merchantName)
 	var server, command1, command2, act string
+	ipList = strings.ReplaceAll(ipList, "\n", ",")
+	whiteListIP := strings.ReplaceAll(whiteList.IP, "\n", ",")
 	switch action {
 	case "add":
 		act = "add_ip"
@@ -106,29 +152,31 @@ func executeRemoteCommand(country, merchantName, ipList, action string, whiteLis
 	case "br":
 		server = "15.229.106.224"
 		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, ipList)
-		command2 = fmt.Sprintf("/data/jenkins/workspace/br-all-server/bsicrontask/bsicrontask 172.31.9.57:2379,172.31.4.34:2379,172.31.9.96:2379 /bs/%s.toml %s %s", merchantName, act, whiteList.IP)
+		command2 = fmt.Sprintf("/data/jenkins/workspace/br-all-server/bsicrontask/bsicrontask 172.31.9.57:2379,172.31.4.34:2379,172.31.9.96:2379 /bs/%s.toml %s %s", merchantName, act, whiteListIP)
 	case "pk":
 		server = "16.162.63.178"
 		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config-kp --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, ipList)
-		command2 = fmt.Sprintf("/opt/jenkins/workspace/pk-all-server/bsicrontask/bsicrontask 10.2.32.103:2379,10.2.32.101:2379,10.2.32.102:2379 /pk/%s.toml %s %s", merchantName, act, whiteList.IP)
+		command2 = fmt.Sprintf("/opt/jenkins/workspace/pk-all-server/bsicrontask/bsicrontask 10.2.32.103:2379,10.2.32.101:2379,10.2.32.102:2379 /pk/%s.toml %s %s", merchantName, act, whiteListIP)
 	case "vn":
 		server = "16.162.63.178"
 		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, ipList)
-		command2 = fmt.Sprintf("/opt/jenkins/workspace/vn-all-server/bsicrontask/bsicrontask 10.0.3.102:2379,10.0.3.101:2379,10.0.3.103:2379 /vn/%s.toml %s %s", merchantName, act, whiteList.IP)
+		command2 = fmt.Sprintf("/opt/jenkins/workspace/vn-all-server/bsicrontask/bsicrontask 10.0.3.102:2379,10.0.3.101:2379,10.0.3.103:2379 /vn/%s.toml %s %s", merchantName, act, whiteListIP)
 	case "ph":
 		server = "18.167.173.173"
 		command1 = fmt.Sprintf("/opt/script/ingressIpLimit --kubeconfig=/root/.kube/config --namespace=%s --ingressName=admin-%s --iplist=%s", merchantName, merchantName, ipList)
-		command2 = fmt.Sprintf("/var/lib/jenkins/workspace/php-all-server/bsicrontask/bsicrontask 10.1.3.101:2379,10.1.3.102:2379,10.1.3.103:2379 /ph/%s.toml %s %s", merchantName, act, whiteList.IP)
+		command2 = fmt.Sprintf("/var/lib/jenkins/workspace/php-all-server/bsicrontask/bsicrontask 10.1.3.101:2379,10.1.3.102:2379,10.1.3.103:2379 /ph/%s.toml %s %s", merchantName, act, whiteListIP)
 	default:
 		return fmt.Errorf("错误的国家代码")
 	}
 
 	// 执行修改ingress的白名单
+	log.Printf("执行命令: %s", command1)
 	if err := executeSSHCommand(server, command1); err != nil {
 		return err
 	}
 
 	// 执行后端程序加白
+	log.Printf("执行命令: %s", command2)
 	if err := executeSSHCommand(server, command2); err != nil {
 		return err
 	}
@@ -218,7 +266,7 @@ func validateAndRespond(c *gin.Context, action string) (WhiteList, error) {
 	// Process IPs and check for errors
 	merchantNames := strings.Split(whiteList.MerchantName, ",")
 	for _, merchantName := range merchantNames {
-		_, err := processIPs(whiteList, merchantName, action)
+		_, _, err := processIPs(whiteList, merchantName, action)
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"code":    40000,
@@ -237,8 +285,6 @@ func validateAndRespond(c *gin.Context, action string) (WhiteList, error) {
 
 // 添加或删除白名单业务逻辑
 func whitelistModify(whiteList WhiteList, action string) {
-	log.Println(time.Now().In(time.Local))
-
 	merchantNames := strings.Split(whiteList.MerchantName, ",")
 	for _, merchantName := range merchantNames {
 		mu.Lock()
@@ -250,7 +296,7 @@ func whitelistModify(whiteList WhiteList, action string) {
 		processing[merchantName] = true
 		mu.Unlock()
 
-		ipList, err := processIPs(whiteList, merchantName, action)
+		ipList, hasValidIPs, err := processIPs(whiteList, merchantName, action)
 		if err != nil {
 			log.Printf("处理IP失败: %v", err)
 			mu.Lock()
@@ -259,23 +305,30 @@ func whitelistModify(whiteList WhiteList, action string) {
 			return
 		}
 
+		if !hasValidIPs {
+			mu.Lock()
+			delete(processing, merchantName)
+			mu.Unlock()
+			return
+		}
+
 		resText := ""
 		if action == "add" {
-			resText = fmt.Sprintf("%s商户%s 白名单IP %s %s", whiteList.Country, merchantName, whiteList.IP, action)
+			resText = "添加"
 		} else {
-			resText = fmt.Sprintf("%s商户%s 白名单IP %s %s", whiteList.Country, merchantName, whiteList.IP, action)
+			resText = "删除"
 		}
 
 		err = executeRemoteCommand(whiteList.Country, merchantName, ipList, action, whiteList)
 		if err != nil {
 			log.Printf("执行远程命令失败: %v", err)
-			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, resText, whiteList.OpUser))
+			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, ipList, resText, whiteList.OpUser))
 			mu.Lock()
 			delete(processing, merchantName)
 			mu.Unlock()
 			return
 		} else {
-			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s成功! 操作用户: %s", whiteList.Country, merchantName, whiteList.IP, resText, whiteList.OpUser))
+			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s成功! 操作用户: %s", whiteList.Country, merchantName, ipList, resText, whiteList.OpUser))
 		}
 
 		err = updateDatabaseAndLog(whiteList, merchantName, ipList, action)

@@ -27,7 +27,7 @@ func CORSMiddleware() gin.HandlerFunc {
 
 // ValidateWhiteListIPs 数据校验
 func ValidateWhiteListIPs(whiteList WhiteList) error {
-	ips := strings.Split(whiteList.IP, ",")
+	ips := strings.Split(whiteList.IP, "\n")
 	for _, ip := range ips {
 		ip = strings.TrimSpace(ip)
 		if net.ParseIP(ip) == nil {
@@ -35,4 +35,10 @@ func ValidateWhiteListIPs(whiteList WhiteList) error {
 		}
 	}
 	return nil
+}
+
+func handleLarkMessages() {
+	for msg := range larkChannel {
+		SendToLark(msg)
+	}
 }
