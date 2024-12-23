@@ -298,13 +298,13 @@ func whitelistModify(whiteList WhiteList, action string) {
 		processing[merchantName] = true
 		mu.Unlock()
 
-		ipList, validNewIPs, hasValidIPs, err := processIPs(whiteList, merchantName, action) // 获取 validNewIPs
+		ipList, validNewIPs, hasValidIPs, err := processIPs(whiteList, merchantName, action)
 		if err != nil {
 			log.Printf("处理IP失败: %v", err)
 			mu.Lock()
 			delete(processing, merchantName)
 			mu.Unlock()
-			processNextRequest(merchantName) // 处理下一个请求
+			processNextRequest(merchantName)
 			return
 		}
 
@@ -312,7 +312,7 @@ func whitelistModify(whiteList WhiteList, action string) {
 			mu.Lock()
 			delete(processing, merchantName)
 			mu.Unlock()
-			processNextRequest(merchantName) // 处理下一个请求
+			processNextRequest(merchantName)
 			return
 		}
 
@@ -323,17 +323,19 @@ func whitelistModify(whiteList WhiteList, action string) {
 			resText = "删除"
 		}
 
-		err = executeRemoteCommand(whiteList.Country, merchantName, ipList, validNewIPs, action, whiteList) // 传递 validNewIPs
+		err = executeRemoteCommand(whiteList.Country, merchantName, ipList, validNewIPs, action, whiteList)
 		if err != nil {
 			log.Printf("执行远程命令失败: %v", err)
 			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s失败! 操作用户: %s", whiteList.Country, merchantName, ipList, resText, whiteList.OpUser))
 			mu.Lock()
 			delete(processing, merchantName)
 			mu.Unlock()
-			processNextRequest(merchantName) // 处理下一个请求
+			processNextRequest(merchantName)
 			return
 		} else {
-			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s成功! 操作用户: %s", whiteList.Country, merchantName, ipList, resText, whiteList.OpUser))
+			// Corrected Lark message construction: use validNewIPs
+			validNewIPsStr := strings.Join(validNewIPs, ",") // Format validNewIPs for the message
+			SendToLark(fmt.Sprintf("%s商户%s 白名单IP %s %s成功! 操作用户: %s", whiteList.Country, merchantName, validNewIPsStr, resText, whiteList.OpUser))
 		}
 
 		err = updateDatabaseAndLog(whiteList, merchantName, ipList, action)
@@ -342,7 +344,7 @@ func whitelistModify(whiteList WhiteList, action string) {
 			mu.Lock()
 			delete(processing, merchantName)
 			mu.Unlock()
-			processNextRequest(merchantName) // 处理下一个请求
+			processNextRequest(merchantName)
 			return
 		}
 
