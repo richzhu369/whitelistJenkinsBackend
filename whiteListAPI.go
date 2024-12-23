@@ -87,7 +87,7 @@ func processIPs(whiteList WhiteList, merchantName string, action string) (string
 	}
 
 	if len(failedIPs) > 0 {
-		message := fmt.Sprintf("商户 %s 的 IP %s 已存在 操作用户: %s", merchantName, strings.Join(failedIPs, ","), whiteList.OpUser)
+		message := fmt.Sprintf("%s 商户 %s 的 IP %s 已存在 操作用户: %s", whiteList.Country, merchantName, strings.Join(failedIPs, ","), whiteList.OpUser)
 
 		muLarkSent.Lock()
 		if _, ok := larkSent[message]; !ok {
